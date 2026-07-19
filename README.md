@@ -28,3 +28,29 @@ This project relies on a fan made Google Sheets layout, specifically, the Lite v
 ```bash
 git clone [https://github.com/davidtian278-hue/Arcaea-B30-Generator.git](https://github.com/davidtian278-hue/Arcaea-B30-Generator.git)
 cd Arcaea-B30-Generator
+```
+
+### 2. Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Environment Variables
+Create a `.env` file in the root directory:
+
+```env
+DISCORD_TOKEN=your_discord_bot_token
+GEMINI_API_KEY=your_gemini_api_key
+SPREADSHEET_ID=your_google_sheet_id
+```
+
+### 4. Google Credentials
+Place your Google Service Account key file in the root directory named `credentials.json`.
+
+### 5. Assets
+Ensure you have a `jackets/` folder containing `.jpg` artwork files named after the songs (NOTE SOME JACKETS ARE WRONG), and a `placeholder.png` file for missing jackets.
+
+### 6. Run the bot
+```bash
+python bot.py
+```
