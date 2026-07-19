@@ -204,6 +204,10 @@ def update_score_in_sheet(song_target, diff_target, score_value):
 
         clean_score = str(score_value).replace(",", "").strip()
 
+# --- SAFEGUARD CHECK ---
+        # Ensure the score is purely numbers and within the realistic boundaries of the game
+        if not clean_score.isdigit() or not (0 <= int(clean_score) <= 11000000):
+            return f"❌ Skipped **{matched_song_name}**: The score '{clean_score}' is invalid. It must be a number between 0 and 11,000,000."
         # Update Column H
         update_range = f"'{SHEET_NAME}'!H{row_index}"
         service.spreadsheets().values().update(
