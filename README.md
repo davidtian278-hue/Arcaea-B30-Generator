@@ -1,4 +1,4 @@
-# Arcaea B30 Generator
+# Arcaea AI Score Scraper & B30 Generator
 
 A custom Discord bot designed to automate Arcaea score tracking and generate B30 image. It uses Google's Gemini AI to scan score screenshots directly from Discord, logs them into a Google Spreadsheet, and generates the B30 image.
 
@@ -44,7 +44,13 @@ Create a `.env` file in the root directory:
 DISCORD_TOKEN=your_discord_bot_token
 GEMINI_API_KEY=your_gemini_api_key
 SPREADSHEET_ID=your_google_sheet_id
+
+# Optional — only needed if you rename the sheet tabs from the template defaults below
+INPUT_TAB_NAME=점수 입력 [Score Input]
+B30_TAB_NAME=B30 컨설턴트 [Overview]
 ```
+
+`INPUT_TAB_NAME` and `B30_TAB_NAME` are optional. If you rename either tab in your own copy, set the matching variable here so the bot can still find it.
 
 ### 4. Google Credentials
 1. Go to the [Google Cloud Console Service Accounts Page](https://console.cloud.google.com/projectselector2/iam-admin/serviceaccounts).
@@ -55,13 +61,7 @@ SPREADSHEET_ID=your_google_sheet_id
 ### 5. Assets
 Ensure you have a `jackets/` folder containing `.jpg` artwork files named after the songs (NOTE SOME JACKETS ARE WRONG), and a `placeholder.png` file for missing jackets.
 
-### 6. Spreadsheet Setup
-Make sure you remove the excess text in the sheet tabs so they are just:
-* **`Score Input`** - Where raw score logs are written.
-* **`B30`** - Where top scores and rating calculations are pulled from.
-* <img width="400" height="114" alt="image" src="https://github.com/user-attachments/assets/2bb30ede-85cd-4ec5-abab-67989c7c163c" />
-
-### 7. Run the bot
+### 6. Run the bot
 ```bash
 python bot.py
 ```
@@ -72,4 +72,3 @@ python bot.py
 ### Example of simple IOS webhook shortcut
 
 <img width="1700" height="856" alt="image" src="https://github.com/user-attachments/assets/3161864a-22be-404c-88d3-e4b09b19c287" />
-

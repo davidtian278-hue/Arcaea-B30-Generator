@@ -9,13 +9,21 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import re
 import asyncio
+import logging
+from collections import deque
 from datetime import datetime
 from dotenv import load_dotenv
 import os
 import difflib
 
+# --- LOGGING ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+logger = logging.getLogger("arcaea-bot")
+
 # --- 1. CONFIGURATION ---
-# Load the keys from the .env file (override=True ignores old cached passwords)
 load_dotenv(override=True) 
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
@@ -23,9 +31,9 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
 SERVICE_ACCOUNT_FILE = 'credentials.json'
 
-# Tab Names
-SHEET_NAME = "Score Input" # For the AI Scanner
-B30_TAB_NAME = "b30"       # For the B30 Generator
+# Tab Names (Configurable via .env)
+INPUT_TAB_NAME = os.getenv('INPUT_TAB_NAME', '점수 입력 [Score Input]')
+B30_TAB_NAME = os.getenv('B30_TAB_NAME', 'B30 컨설턴트 [Overview]')
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
@@ -40,7 +48,7 @@ class MyBot(commands.Bot):
 
     async def setup_hook(self):
         await self.tree.sync()
-        print(f"Synced slash commands for {self.user}")
+        logger.info(f"Synced slash commands for {self.user}")
 
 bot = MyBot()
 
@@ -62,25 +70,49 @@ DIFF_COLORS = {
     'PST': (150, 150, 255)
 }
 
+FONT_CANDIDATES = [
+    "arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+]
+
+def load_font(size):
+    for path in FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
 # --- 3. SCANNER LOGIC STATE ---
-# Prioritize newer flash models to avoid 404s, falling back as needed
 VALID_MODELS = [
     'gemini-2.5-flash',
     'gemini-3.0-flash', 
     'gemini-1.5-flash',
     'gemini-1.5-pro'
 ]
-processed_messages = set() 
-SONG_CACHE = [] # Stores spreadsheet songs for autocomplete
+processed_messages = deque(maxlen=500)  
+SONG_CACHE = [] 
 
 # --- 4. LOGIC HELPERS ---
 
+FUZZY_MATCH_THRESHOLD = 0.72  
+
+_sheets_service = None
+
+def get_sheets_service():
+    global _sheets_service
+    if _sheets_service is None:
+        creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        _sheets_service = build('sheets', 'v4', credentials=creds)
+    return _sheets_service
+
 def fetch_song_list():
-    """Downloads the song list from Sheets so the bot can search it quickly."""
     global SONG_CACHE
     try:
-        service = build('sheets', 'v4', credentials=service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES))
-        range_name = f"'{SHEET_NAME}'!A1:A2500" 
+        service = get_sheets_service()
+        range_name = f"'{INPUT_TAB_NAME}'!A1:A2500" 
         result = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=range_name).execute()
         rows = result.get('values', [])
         
@@ -88,19 +120,16 @@ def fetch_song_list():
         for row in rows:
             if row:
                 raw_name = str(row[0]).strip()
-                # Scrub the difficulty tag out for a clean drop-down
                 clean_name = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_name).strip()
-                # Only add if it's not already in the list (prevents duplicates)
                 if clean_name and clean_name not in temp_cache:
                     temp_cache.append(clean_name)
                     
         SONG_CACHE = temp_cache
-        print(f"Loaded {len(SONG_CACHE)} clean songs into autocomplete cache.")
+        logger.info(f"Loaded {len(SONG_CACHE)} clean songs into autocomplete cache.")
     except Exception as e:
-        print(f"Failed to fetch songs for cache: {e}")
+        logger.exception("Failed to fetch songs for cache")
 
 def map_difficulty(text):
-    """Maps based on your specific color rules: FTR=Purple, ETR=Light Purple, BYD=Red."""
     t = str(text).upper().strip()
     if any(x in t for x in ["FTR", "FUTURE", "PURPLE", "VIOLET"]): return "FTR"
     if any(x in t for x in ["ETR", "ETERNAL", "LIGHT PURPLE", "LAVENDER", "WHITE"]): return "ETR"
@@ -114,18 +143,17 @@ def update_score_in_sheet(song_target, diff_target, score_value):
         if any(f in song_target.lower() for f in ["track", "complete", "new", "record", "clear"]):
             return "SKIP"
 
-        service = build('sheets', 'v4', credentials=service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES))
-        
-        # Standardize for comparison
+        service = get_sheets_service()
         ai_song = song_target.strip().lower()
         final_diff = map_difficulty(diff_target)
+        used_fuzzy_ratio = False  
         
-        range_name = f"'{SHEET_NAME}'!A1:D2500"
+        range_name = f"'{INPUT_TAB_NAME}'!A1:D2500"
         result = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=range_name).execute()
         rows = result.get('values', [])
         if not rows: return "Sheet Error: No data found."
 
-        matched_song_name = song_target # Default fallback
+        matched_song_name = song_target 
 
         # --- STEP 1: STRICT EXACT MATCH ---
         row_index = -1
@@ -162,7 +190,6 @@ def update_score_in_sheet(song_target, diff_target, score_value):
             best_row_idx = -1
             best_matched_name = ""
 
-            # Helper to extract clean word structures 
             def get_words(text):
                 return set(re.findall(r'\w+', text.lower()))
 
@@ -175,17 +202,14 @@ def update_score_in_sheet(song_target, diff_target, score_value):
                     sheet_song = sheet_song_clean.lower()
                     
                     if not sheet_song: continue
-                    # Enforce difficulty matching early to avoid cross-matching columns
                     if len(row) > 3 and map_difficulty(row[3]) != final_diff: continue
 
-                    # Check A: Word intersection (Handles when Title + Artist are glued or flipped)
                     sheet_words = get_words(sheet_song)
                     if sheet_words and sheet_words.issubset(ai_words):
                         row_index = i + 1
                         matched_song_name = sheet_song_clean
                         break
 
-                    # Check B: Text similarity score tracking (Handles missing characters or typos)
                     ratio = difflib.SequenceMatcher(None, sheet_song, ai_song).ratio()
                     if ratio > best_ratio:
                         best_ratio = ratio
@@ -194,28 +218,28 @@ def update_score_in_sheet(song_target, diff_target, score_value):
                         
                 if row_index != -1: break
 
-            # If strict word subsetting missed, rely on our closest fuzzy matching winner
-            if row_index == -1 and best_ratio > 0.60:
+            if row_index == -1 and best_ratio > FUZZY_MATCH_THRESHOLD:
                 row_index = best_row_idx
                 matched_song_name = best_matched_name
+                used_fuzzy_ratio = True
+                logger.info(f"Fuzzy-matched '{song_target}' -> '{matched_song_name}' (ratio={best_ratio:.2f})")
 
         if row_index == -1:
             return f"No match for **{song_target}** on **{final_diff}**."
 
         clean_score = str(score_value).replace(",", "").strip()
 
-# --- SAFEGUARD CHECK ---
-        # Ensure the score is purely numbers and within the realistic boundaries of the game
+        # --- SAFEGUARD CHECK ---
         if not clean_score.isdigit() or not (0 <= int(clean_score) <= 11000000):
             return f"❌ Skipped **{matched_song_name}**: The score '{clean_score}' is invalid. It must be a number between 0 and 11,000,000."
+        
         # Update Column H
-        update_range = f"'{SHEET_NAME}'!H{row_index}"
+        update_range = f"'{INPUT_TAB_NAME}'!H{row_index}"
         service.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID, range=update_range,
             valueInputOption="USER_ENTERED", body={'values': [[clean_score]]}
         ).execute()
 
-        # --- Fetch the play potential (PTT) from the b30 tab by matching song title ---
         ptt_display = ""
         try:
             b30_result = service.spreadsheets().values().get(
@@ -236,14 +260,15 @@ def update_score_in_sheet(song_target, diff_target, score_value):
             pass
 
         pm_tag = " **PURE MEMORY!**" if int(clean_score) >= 10000000 else ""
-        return f"**{matched_song_name}** [{final_diff}] -> **{clean_score}**{ptt_display}{pm_tag}"
+        fuzzy_note = " _(approximate title match — please verify)_" if used_fuzzy_ratio else ""
+        return f"**{matched_song_name}** [{final_diff}] -> **{clean_score}**{ptt_display}{pm_tag}{fuzzy_note}"
     except Exception as e:
+        logger.exception("Error updating score in sheet")
         return f"Sheet Error: {str(e)}"
 
 # --- 5. SLASH COMMANDS ---
 
 async def song_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-    """Filters the cached song list as the user types."""
     matches = [song for song in SONG_CACHE if current.lower() in song.lower()]
     return [app_commands.Choice(name=match, value=match) for match in matches[:25]]
 
@@ -276,38 +301,6 @@ async def manual_submit(interaction: discord.Interaction, song: str, difficulty:
         await interaction.followup.send(res)
 
 
-@bot.tree.command(name="hikari", description="Translate your message into Hikari's elegant voice")
-@app_commands.describe(text="The message you want Hikari to say")
-async def hikari_speak(interaction: discord.Interaction, text: str):
-    await interaction.response.defer()
-    
-    prompt = f"""
-    Rewrite the following text in the persona of Hikari from the rhythm game Arcaea. 
-    Hikari is gentle, ethereal, somewhat formal, and deeply connected to memories, glass, skies, and light. 
-    She speaks calmly, with a sense of wonder, grace, and sometimes a hint of melancholy. 
-    Keep the core meaning of the original message entirely intact, but change the tone and vocabulary to match her perfectly. 
-    Do not add conversational filler like 'Here is your translation', just output her exact words.
-    
-    Original text: {text}
-    """
-    
-    hikari_text = None
-    
-    for model_name in VALID_MODELS:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            hikari_text = response.text.strip()
-            break
-        except:
-            continue
-            
-    if hikari_text:
-        await interaction.followup.send(f"{hikari_text}")
-    else:
-        await interaction.followup.send("*The light faded...* (Error: None of the AI models are currently responding. Check your API limits!)")
-
-
 @bot.tree.command(name="b30", description="Generate your Arcaea B30 and Potential Stats")
 @app_commands.describe(
     username="The name you want displayed on the image",
@@ -318,8 +311,7 @@ async def b30_slash(interaction: discord.Interaction, current_ptt: float = None,
     await interaction.response.defer() 
     
     try:
-        # Fetch from Google Sheets 'b30' tab
-        service = build('sheets', 'v4', credentials=service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES))
+        service = get_sheets_service()
         result = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{B30_TAB_NAME}'!B8:F37").execute()
         rows = result.get('values', [])
 
@@ -335,15 +327,12 @@ async def b30_slash(interaction: discord.Interaction, current_ptt: float = None,
         hypo_max = (b30_sum + top_10_sum) / 40
         gen_date = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        try:
-            font_title = ImageFont.truetype("arial.ttf", 16)
-            font_score = ImageFont.truetype("arial.ttf", 18)
-            font_ptt = ImageFont.truetype("arial.ttf", 20)
-            font_header = ImageFont.truetype("arial.ttf", 42)
-            font_stats = ImageFont.truetype("arial.ttf", 22)
-            font_date = ImageFont.truetype("arial.ttf", 16)
-        except:
-            font_title = font_score = font_ptt = font_header = font_stats = font_date = ImageFont.load_default()
+        font_title = load_font(16)
+        font_score = load_font(18)
+        font_ptt = load_font(20)
+        font_header = load_font(42)
+        font_stats = load_font(22)
+        font_date = load_font(16)
 
         canvas_w = (JACKET_SIZE + MARGIN) * COLUMNS + MARGIN
         canvas_h = HEADER_SPACE + (JACKET_SIZE + BOTTOM_TEXT_SPACE + MARGIN) * ROWS + MARGIN
@@ -402,7 +391,7 @@ async def b30_slash(interaction: discord.Interaction, current_ptt: float = None,
             await interaction.followup.send(file=discord.File(fp=binary, filename=f'{display_name}_b30.png'))
 
     except Exception as e:
-        print(f"Error: {e}")
+        logger.exception("Error generating B30 image")
         await interaction.followup.send(f"Error generating B30: {e}")
 
 
@@ -410,20 +399,19 @@ async def b30_slash(interaction: discord.Interaction, current_ptt: float = None,
 
 @bot.event
 async def on_ready():
-    print(f"Bot online")
-    fetch_song_list() # Load songs for autocomplete
+    logger.info(f"Bot online as {bot.user}")
+    fetch_song_list() 
 
 @bot.event
 async def on_message(message):
     global processed_messages
     if (message.author.bot and not message.webhook_id) or message.author == bot.user or message.id in processed_messages: return
 
-    # Trigger scanner only if there is an image attached
     if message.attachments:
         images = [a for a in message.attachments if any(a.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg'])]
         if not images: return
 
-        processed_messages.add(message.id)
+        processed_messages.append(message.id)
         status_msg = await message.channel.send("Analyzing result...")
         report = []
 
@@ -431,7 +419,6 @@ async def on_message(message):
             img_bytes = await attachment.read()
             extracted_data = None 
             
-            # Try to read the image using Gemini
             for model_name in VALID_MODELS:
                 if extracted_data: break 
                 
@@ -456,28 +443,26 @@ async def on_message(message):
                     
                     response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": img_bytes}])
                     
-                    # Clean up basic markdown
                     ai_text = response.text.replace("**", "").strip()
                     
                     if "|" in ai_text:
                         parts = [p.strip() for p in ai_text.split("|")]
                         if len(parts) >= 3:
-                            # Keep title and difficulty raw, but strip commas/apostrophes from the score
                             raw_title = parts[0]
                             raw_diff = parts[1]
                             clean_score_only = parts[2].replace(",", "").replace("'", "").strip()
                             
                             extracted_data = [raw_title, raw_diff, clean_score_only]
                             break 
-                except: continue
+                except Exception as e:
+                    logger.warning(f"Model '{model_name}' failed to read image: {e}")
+                    continue
 
             if extracted_data:
                 title, diff, ai_score = extracted_data[0], extracted_data[1], extracted_data[2]
                 
-                # Strip out accidental difficulty tags from the title string
                 title = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', title).strip()
                 
-                # --- AUTO-UPLOAD LOGIC ---
                 await status_msg.edit(content=f"Uploading **{title}** to spreadsheet...")
                 res = update_score_in_sheet(title, diff, ai_score)
                 if res != "SKIP": 
@@ -490,9 +475,6 @@ async def on_message(message):
             await status_msg.edit(content="**Update Summary:**\n" + "\n".join(report))
         else:
             await status_msg.delete()
-            
-        if len(processed_messages) > 100:
-            processed_messages.clear()
 
 # --- RUN BOT ---
 bot.run(DISCORD_TOKEN)
