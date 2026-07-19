@@ -65,6 +65,10 @@ Make sure you remove the excess text in the sheet tabs so they are just:
 ```bash
 python bot.py
 ```
+
+
+
+
 ### Example of simple IOS webhook shortcut
 
 <img width="1700" height="856" alt="image" src="https://github.com/user-attachments/assets/3161864a-22be-404c-88d3-e4b09b19c287" />
