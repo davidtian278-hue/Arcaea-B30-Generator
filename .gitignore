@@ -1,5 +1,2 @@
 .env
 credentials.json
-main.py
-bulk_downloader.py
-names.csv
