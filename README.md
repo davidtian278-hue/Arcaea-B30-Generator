@@ -47,7 +47,10 @@ SPREADSHEET_ID=your_google_sheet_id
 ```
 
 ### 4. Google Credentials
-Place your Google Service Account key file in the root directory named `credentials.json`.
+1. Go to the [Google Cloud Console Service Accounts Page](https://console.cloud.google.com/projectselector2/iam-admin/serviceaccounts).
+2. Create a service account (or select an existing one) and generate a new **JSON key**.
+3. Download the key file, rename it to `credentials.json`, and place it in the root directory of this project.
+4. Open your Google Sheet, click **Share**, and give your service account's `client_email` address **Editor** permissions.
 
 ### 5. Assets
 Ensure you have a `jackets/` folder containing `.jpg` artwork files named after the songs (NOTE SOME JACKETS ARE WRONG), and a `placeholder.png` file for missing jackets.
@@ -56,6 +59,7 @@ Ensure you have a `jackets/` folder containing `.jpg` artwork files named after 
 Make sure you remove the excess text in the sheet tabs so they are just:
 * **`Score Input`** - Where raw score logs are written.
 * **`B30`** - Where top scores and rating calculations are pulled from.
+* <img width="400" height="114" alt="image" src="https://github.com/user-attachments/assets/2bb30ede-85cd-4ec5-abab-67989c7c163c" />
 
 ### 7. Run the bot
 ```bash
