@@ -26,7 +26,7 @@ This project relies on a fan made Google Sheets layout, specifically, the Lite v
 
 ### 1. Clone the repository
 ```bash
-git clone [https://github.com/davidtian278-hue/Arcaea-B30-Generator.git](https://github.com/davidtian278-hue/Arcaea-B30-Generator.git)
+git clone https://github.com/davidtian278-hue/Arcaea-B30-Generator.git
 cd Arcaea-B30-Generator
 ```
 
