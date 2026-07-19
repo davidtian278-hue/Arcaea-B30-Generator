@@ -12,6 +12,7 @@ import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 import os
+import difflib
 
 # --- 1. CONFIGURATION ---
 # Load the keys from the .env file (override=True ignores old cached passwords)
@@ -130,14 +131,12 @@ def update_score_in_sheet(song_target, diff_target, score_value):
         row_index = -1
         for i, row in enumerate(rows):
             for cell in row[:3]:
-                # Grab the sheet name and scrub it so it matches our clean drop-down name
                 raw_sheet_song = str(cell).strip()
                 sheet_song = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip().lower()
                 
                 if sheet_song == ai_song: 
                     if len(row) > 3 and map_difficulty(row[3]) == final_diff:
                         row_index = i + 1
-                        # Save the cleaned name for the Discord message
                         matched_song_name = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip()
                         break
             if row_index != -1: break
@@ -156,6 +155,49 @@ def update_score_in_sheet(song_target, diff_target, score_value):
                             matched_song_name = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip()
                             break
                 if row_index != -1: break
+
+        # --- STEP 3: TOKEN OVERLAP & SIMILARITY RATIO FALLBACK ---
+        if row_index == -1:
+            best_ratio = 0.0
+            best_row_idx = -1
+            best_matched_name = ""
+
+            # Helper to extract clean word structures 
+            def get_words(text):
+                return set(re.findall(r'\w+', text.lower()))
+
+            ai_words = get_words(ai_song)
+
+            for i, row in enumerate(rows):
+                for cell in row[:3]:
+                    raw_sheet_song = str(cell).strip()
+                    sheet_song_clean = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip()
+                    sheet_song = sheet_song_clean.lower()
+                    
+                    if not sheet_song: continue
+                    # Enforce difficulty matching early to avoid cross-matching columns
+                    if len(row) > 3 and map_difficulty(row[3]) != final_diff: continue
+
+                    # Check A: Word intersection (Handles when Title + Artist are glued or flipped)
+                    sheet_words = get_words(sheet_song)
+                    if sheet_words and sheet_words.issubset(ai_words):
+                        row_index = i + 1
+                        matched_song_name = sheet_song_clean
+                        break
+
+                    # Check B: Text similarity score tracking (Handles missing characters or typos)
+                    ratio = difflib.SequenceMatcher(None, sheet_song, ai_song).ratio()
+                    if ratio > best_ratio:
+                        best_ratio = ratio
+                        best_row_idx = i + 1
+                        best_matched_name = sheet_song_clean
+                        
+                if row_index != -1: break
+
+            # If strict word subsetting missed, rely on our closest fuzzy matching winner
+            if row_index == -1 and best_ratio > 0.60:
+                row_index = best_row_idx
+                matched_song_name = best_matched_name
 
         if row_index == -1:
             return f"No match for **{song_target}** on **{final_diff}**."
@@ -177,7 +219,6 @@ def update_score_in_sheet(song_target, diff_target, score_value):
             ).execute()
             b30_rows = b30_result.get('values', [])
             for b30_row in b30_rows:
-                # b30 columns: Rank, Level, Title, Score, PTT (indices 0-4)
                 if len(b30_row) >= 5:
                     b30_title = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', str(b30_row[2])).strip().lower()
                     if b30_title == matched_song_name.lower() or b30_title in matched_song_name.lower() or matched_song_name.lower() in b30_title:
@@ -371,7 +412,7 @@ async def on_ready():
 @bot.event
 async def on_message(message):
     global processed_messages
-    if message.author.bot or message.id in processed_messages: return
+    if (message.author.bot and not message.webhook_id) or message.author == bot.user or message.id in processed_messages: return
 
     # Trigger scanner only if there is an image attached
     if message.attachments:
@@ -431,70 +472,12 @@ async def on_message(message):
                 
                 # Strip out accidental difficulty tags from the title string
                 title = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', title).strip()
-                final_diff_mapped = map_difficulty(diff)
                 
-                prompt_text = (
-                    f"Found: **{title}** [{final_diff_mapped}] -> **{ai_score}**\n"
-                    f"- `y` to accept, `n` to cancel.\n"
-                    f"- Type a **number** to fix score only.\n"
-                    f"- Type `Title | Diff | Score` to fix everything.\n"
-                    f"*(Timeout in 60s)*"
-                )
-                await status_msg.edit(content=prompt_text)
-
-                def check(m):
-                    if m.author != message.author or m.channel != message.channel:
-                        return False
-                    
-                    content = m.content.lower().strip()
-                    if content in ['y', 'yes', 'n', 'no']: return True
-                    if content.replace(',', '').isdigit(): return True
-                    if "|" in content: return True
-                    return False
-
-                try:
-                    confirm_msg = await bot.wait_for('message', check=check, timeout=60.0)
-                    user_response = confirm_msg.content.strip()
-                    user_lower = user_response.lower()
-                    
-                    final_title = title
-                    final_diff = diff
-                    final_score = ai_score
-                    should_upload = False
-
-                    if user_lower in ['y', 'yes']:
-                        should_upload = True
-                    elif user_lower in ['n', 'no']:
-                        should_upload = False
-                    elif "|" in user_response:
-                        parts = [p.strip() for p in user_response.split("|")]
-                        if len(parts) >= 3:
-                            final_title = parts[0]
-                            final_diff = parts[1]
-                            final_score = parts[2].replace(',', '')
-                            should_upload = True
-                        else:
-                            report.append(f"Invalid override format for **{title}**. Skipped.")
-                            should_upload = False
-                    else:
-                        final_score = user_response.replace(',', '')
-                        should_upload = True
-
-                    if should_upload:
-                        try: 
-                            await confirm_msg.delete() 
-                        except: 
-                            pass 
-                        
-                        await status_msg.edit(content=f"Uploading to spreadsheet...")
-                        res = update_score_in_sheet(final_title, final_diff, final_score)
-                        if res != "SKIP": report.append(res)
-                    else:
-                        if "|" not in user_response:
-                            report.append(f"Canceled upload for **{title}**.")
-                        
-                except asyncio.TimeoutError:
-                    report.append(f"Timed out waiting for confirmation for **{title}**.")
+                # --- AUTO-UPLOAD LOGIC ---
+                await status_msg.edit(content=f"Uploading **{title}** to spreadsheet...")
+                res = update_score_in_sheet(title, diff, ai_score)
+                if res != "SKIP": 
+                    report.append(res)
                     
             else:
                 report.append("Image could not be read. (Models may be exhausted or rate-limited)")
