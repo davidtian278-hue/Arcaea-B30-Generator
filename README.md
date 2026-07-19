@@ -52,7 +52,13 @@ Place your Google Service Account key file in the root directory named `credenti
 ### 5. Assets
 Ensure you have a `jackets/` folder containing `.jpg` artwork files named after the songs (NOTE SOME JACKETS ARE WRONG), and a `placeholder.png` file for missing jackets.
 
-### 6. Run the bot
+### 6. Spreadsheet Setup
+Make sure you remove the excess text in the sheet tabs so they are just:
+* **`Score Input`** - Where raw score logs are written.
+* **`B30`** - Where top scores and rating calculations are pulled from.
+
+### 7. Run the bot
 ```bash
 python bot.py
 ```
+
