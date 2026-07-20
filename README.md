@@ -1,6 +1,6 @@
 # Arcaea AI Score Scraper & B30 Generator
 
-A custom Discord bot designed to automate Arcaea score tracking and generate B30 image. It uses Google's Gemini AI to scan score screenshots directly from Discord, logs them into a Google Spreadsheet, and generates the B30 image.
+A custom Discord bot designed to automate Arcaea score tracking and generate B30 image. It uses Google's Gemini AI to scan score screenshots directly from Discord, logs them into a Google Spreadsheet, and generates a B30 image based off of logged scores.
 
 <img width="480" height="440" alt="Bot-ezgif com-crop" src="https://github.com/user-attachments/assets/7b1cdc5f-f114-4f92-935a-813229d9d201" />
 
