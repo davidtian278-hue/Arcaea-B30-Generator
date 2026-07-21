@@ -5,7 +5,7 @@ A custom Discord bot designed to automate Arcaea score tracking and generate a B
 <img width="480" height="440" alt="Bot-ezgif com-crop" src="https://github.com/user-attachments/assets/7b1cdc5f-f114-4f92-935a-813229d9d201" />
 
 # Example B30
-<img width="980" height="1380" alt="image" src="https://github.com/user-attachments/assets/a73b1b76-aeee-4a06-86c2-eb10a4b9df9e" />
+<img width="490" height="690" alt="image" src="https://github.com/user-attachments/assets/a73b1b76-aeee-4a06-86c2-eb10a4b9df9e" />
 
 Note: This bot is currently intended only for personal server use. It can scan result images posted directly by users or via automated Discord webhooks.
 
