@@ -1,7 +1,8 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 import pandas as pd
@@ -38,7 +39,7 @@ B30_TAB_NAME = os.getenv('B30_TAB_NAME', 'B30 컨설턴트 [Overview]')
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # --- INITIALIZATION ---
-genai.configure(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -398,11 +399,6 @@ async def b30_slash(interaction: discord.Interaction, current_ptt: float = None,
 # --- 6. BOT EVENTS ---
 
 @bot.event
-async def on_ready():
-    logger.info(f"Bot online as {bot.user}")
-    fetch_song_list() 
-
-@bot.event
 async def on_message(message):
     global processed_messages
     if (message.author.bot and not message.webhook_id) or message.author == bot.user or message.id in processed_messages: return
@@ -423,7 +419,6 @@ async def on_message(message):
                 if extracted_data: break 
                 
                 try:
-                    model = genai.GenerativeModel(model_name)
                     prompt = """
                     Extract Arcaea result: Song Title | Difficulty | Score.
                     
@@ -441,7 +436,14 @@ async def on_message(message):
                     Format: Title | Difficulty | Score
                     """
                     
-                    response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": img_bytes}])
+                    # --- UPDATED API CALL FOR THE NEW SDK ---
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[
+                            prompt, 
+                            types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
+                        ]
+                    )
                     
                     ai_text = response.text.replace("**", "").strip()
                     
