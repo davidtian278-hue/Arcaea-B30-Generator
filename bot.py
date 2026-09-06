@@ -363,7 +363,9 @@ async def b30_slash(interaction: discord.Interaction, current_ptt: float = None,
             difficulty = diff_match.group(1).upper() if diff_match else 'FTR'
             clean_title = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST)\]\s*$', '', raw_title).strip()
 
-            jacket_file_name = clean_title.replace(":", "").replace("/", "").strip()
+            # Jacket assets use song titles with characters Windows cannot store
+            # removed. Keep this in sync with the names in jackets/.
+            jacket_file_name = re.sub(r'[<>:"/\\|?*]', '', clean_title).strip()
             jacket_path = os.path.join(JACKET_FOLDER, f"{jacket_file_name}.jpg")
             
             if os.path.exists(jacket_path):
