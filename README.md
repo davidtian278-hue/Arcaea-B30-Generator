@@ -1,3 +1,4 @@
+<img width="988" height="2580" alt="tainnation_b50" src="https://github.com/user-attachments/assets/a9d2304b-104a-4df4-8400-9d0876cb5c74" />
 # Arcaea AI Score Scraper & B50 Generator
 
 A Discord bot for tracking Arcaea scores with the version 7.0 B50 system. It uses Google Gemini to read result screenshots, writes scores to the KR Consultant Google Sheet, and renders a Best 50 image with local song jackets.
@@ -5,7 +6,7 @@ A Discord bot for tracking Arcaea scores with the version 7.0 B50 system. It use
 <img width="480" height="440" alt="Bot-ezgif com-crop" src="https://github.com/user-attachments/assets/7b1cdc5f-f114-4f92-935a-813229d9d201" />
 
 # Example B50
-<img width="294" height="768" alt="tainnation_b50" src="https://github.com/user-attachments/assets/e86f23bf-5950-4ca7-a12f-6d5382cca8cb" />
+<img width="988" height="2580" alt="tainnation_b50" src="https://github.com/user-attachments/assets/c6e9f3af-1def-419c-9ebc-fc176e7dcdb0" />
 
 Note: This bot is currently intended only for personal server use. It can scan result images posted directly by users or via automated Discord webhooks.
 
