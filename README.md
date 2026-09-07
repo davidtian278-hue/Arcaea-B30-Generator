@@ -1,4 +1,3 @@
-<img width="988" height="2580" alt="tainnation_b50" src="https://github.com/user-attachments/assets/a9d2304b-104a-4df4-8400-9d0876cb5c74" />
 # Arcaea AI Score Scraper & B50 Generator
 
 A Discord bot for tracking Arcaea scores with the version 7.0 B50 system. It uses Google Gemini to read result screenshots, writes scores to the KR Consultant Google Sheet, and renders a Best 50 image with local song jackets.
@@ -24,6 +23,11 @@ This project relies on a fan made Google Sheets layout, specifically, the KR Con
 * Displays colored difficulty diamonds and gold potential values for the top 10 plays.
 * Supports difficulty-specific jacket artwork with automatic fallback to the normal jacket.
 * Tries multiple Gemini models when a model is unavailable, rate-limited, or returns an invalid result.
+
+# Commands
+/b50
+/submit
+(Pretty Self Explanatory)
 
 ## Tech Stack
 * Python 3.x
