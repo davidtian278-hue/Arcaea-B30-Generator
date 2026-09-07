@@ -1,10 +1,10 @@
-# Arcaea AI Score Scraper & B30 Generator
+# Arcaea AI Score Scraper & B50 Generator
 
-A custom Discord bot designed to automate Arcaea score tracking and generate a B30 image. It uses Google's Gemini AI to scan score screenshots directly from Discord, logs them into a Google Spreadsheet, and generates a B30 image based off of logged scores.
+A Discord bot for tracking Arcaea scores with the version 7.0 B50 system. It uses Google Gemini to read result screenshots, writes scores to the KR Consultant Google Sheet, and renders a Best 50 image with local song jackets.
 
 <img width="480" height="440" alt="Bot-ezgif com-crop" src="https://github.com/user-attachments/assets/7b1cdc5f-f114-4f92-935a-813229d9d201" />
 
-# Example B30
+# Example B50
 <img width="323" height="460" alt="image" src="https://github.com/user-attachments/assets/a73b1b76-aeee-4a06-86c2-eb10a4b9df9e" />
 
 Note: This bot is currently intended only for personal server use. It can scan result images posted directly by users or via automated Discord webhooks.
@@ -15,9 +15,14 @@ This project relies on a fan made Google Sheets layout, specifically, the Lite v
 * Arcaea 컨설턴트 시트 Discord: https://discord.gg/GZw4zJgnus
 
 ## Features
-* AI Score Scanning: Reads result screenshots sent by users or webhooks and automatically extracts song titles, difficulties, and scores.
-* Google Sheets Integration: Automatically logs valid scores directly to your spreadsheet.
-* B30 Image Generation: Renders a Best 30 showcase image using tracked scores and local jacket artwork.
+* Reads song title, difficulty, and score from Arcaea result screenshots.
+* Supports PST, PRS, FTR, ETR, BYD, and the version 7.0 INS difficulty.
+* Updates the matching chart in the configured Google Sheet.
+* Provides song autocomplete for the `/submit` command.
+* Renders 50 plays in a 5-column by 10-row layout.
+* Displays colored difficulty diamonds and gold potential values for the top 10 plays.
+* Supports difficulty-specific jacket artwork with automatic fallback to the normal jacket.
+* Tries multiple Gemini models when a model is unavailable, rate-limited, or returns an invalid result.
 
 ## Tech Stack
 * Python 3.x
@@ -46,14 +51,11 @@ Create a `.env` file in the root directory:
 ```env
 DISCORD_TOKEN=your_discord_bot_token
 GEMINI_API_KEY=your_gemini_api_key
-SPREADSHEET_ID=your_google_sheet_id
+SPREADSHEET_ID=your_google_spreadsheet_id
 
-# Optional — only needed if you rename the sheet tabs from the template defaults below
 INPUT_TAB_NAME=점수 입력 [Score Input]
-B30_TAB_NAME=B30 컨설턴트 [Overview]
+DASHBOARD_TAB_NAME=대시보드 [Dashboard]
 ```
-
-`INPUT_TAB_NAME` and `B30_TAB_NAME` are optional. If you rename either tab in your own copy, set the matching variable here so the bot can still find it.
 
 ### 4. Google Credentials
 1. Go to the [Google Cloud Console Service Accounts Page](https://console.cloud.google.com/projectselector2/iam-admin/serviceaccounts).
