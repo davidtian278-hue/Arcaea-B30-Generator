@@ -5,7 +5,7 @@ A Discord bot for tracking Arcaea scores with the version 7.0 B50 system. It use
 <img width="480" height="440" alt="Bot-ezgif com-crop" src="https://github.com/user-attachments/assets/7b1cdc5f-f114-4f92-935a-813229d9d201" />
 
 # Example B50
-<img width="652" height="1702" alt="tainnation_b50" src="https://github.com/user-attachments/assets/c6e9f3af-1def-419c-9ebc-fc176e7dcdb0" />
+<img width="326" height="851" alt="tainnation_b50" src="https://github.com/user-attachments/assets/c6e9f3af-1def-419c-9ebc-fc176e7dcdb0" />
 
 Note: This bot is currently intended only for personal server use. It can scan result images posted directly by users or via automated Discord webhooks.
 
