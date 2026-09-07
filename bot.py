@@ -87,6 +87,15 @@ DIFF_COLORS = {
     'PST': (150, 150, 255)
 }
 
+DIFFICULTY_JACKET_ALIASES = {
+    ('pragmatism -resurrection-', 'BYD'): 'PRAGMATISM',
+    ('ignotus afterburn', 'BYD'): 'Ignotus',
+    ('red and blue and green', 'BYD'): 'Red and Blue',
+    ('singularity vvvip', 'BYD'): 'Singularity',
+    ('vicious [anti] heroism', 'BYD'): 'Vicious Heroism',
+    ('axium divergence', 'BYD'): 'Axium Crisis',
+}
+
 FONT_CANDIDATES = [
     "arial.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -101,6 +110,23 @@ def load_font(size):
         except Exception:
             continue
     return ImageFont.load_default()
+
+def jacket_path_for_chart(title, difficulty):
+    alias_title = DIFFICULTY_JACKET_ALIASES.get((title.casefold(), difficulty), title)
+    candidate_titles = [
+        f"{alias_title} [{difficulty}]",
+        f"{title} [{difficulty}]",
+        title,
+        alias_title,
+    ]
+    checked_paths = set()
+    for candidate_title in candidate_titles:
+        safe_title = re.sub(r'[<>:"/\\|?*]', '', candidate_title).strip()
+        candidate_path = os.path.join(JACKET_FOLDER, f"{safe_title}.jpg")
+        if candidate_path not in checked_paths and os.path.exists(candidate_path):
+            return candidate_path
+        checked_paths.add(candidate_path)
+    return None
 
 def create_vertical_gradient(width, height, top_color, bottom_color):
     image = Image.new('RGB', (width, height), top_color)
@@ -421,13 +447,11 @@ async def b50_slash(interaction: discord.Interaction, current_ptt: float = None,
             difficulty = diff_match.group(1).upper() if diff_match else 'FTR'
             clean_title = re.sub(r'(?i)\s*\[(INS|FTR|ETR|BYD|PRS|PST)\]\s*$', '', raw_title).strip()
 
-            # Jacket assets use song titles with characters Windows cannot store
-            # removed. Keep this in sync with the names in jackets/.
-            jacket_file_name = re.sub(r'[<>:"/\\|?*]', '', clean_title).strip()
-            jacket_path = os.path.join(JACKET_FOLDER, f"{jacket_file_name}.jpg")
-            
-            if os.path.exists(jacket_path):
-                img = Image.open(jacket_path).convert("RGB").resize((JACKET_SIZE, JACKET_SIZE))
+            jacket_path = jacket_path_for_chart(clean_title, difficulty)
+
+            if jacket_path:
+                with Image.open(jacket_path) as jacket_image:
+                    img = jacket_image.convert("RGB").resize((JACKET_SIZE, JACKET_SIZE))
                 canvas.paste(img, (x, y))
             else:
                 canvas.paste(placeholder_img, (x, y))
