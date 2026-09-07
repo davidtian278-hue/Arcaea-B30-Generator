@@ -8,6 +8,8 @@ from google.oauth2 import service_account
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 import io
+import math
+import mimetypes
 import re
 import asyncio
 import logging
@@ -17,6 +19,8 @@ from dotenv import load_dotenv
 import os
 import difflib
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # --- LOGGING ---
 logging.basicConfig(
     level=logging.INFO,
@@ -25,16 +29,17 @@ logging.basicConfig(
 logger = logging.getLogger("arcaea-bot")
 
 # --- 1. CONFIGURATION ---
-load_dotenv(override=True) 
+load_dotenv(os.path.join(BASE_DIR, '.env'), override=True)
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
-SERVICE_ACCOUNT_FILE = 'credentials.json'
+SERVICE_ACCOUNT_FILE = os.path.join(BASE_DIR, 'credentials.json')
 
 # Tab Names (Configurable via .env)
 INPUT_TAB_NAME = os.getenv('INPUT_TAB_NAME', '점수 입력 [Score Input]')
-B30_TAB_NAME = os.getenv('B30_TAB_NAME', 'B30 컨설턴트 [Overview]')
+DASHBOARD_TAB_NAME = os.getenv('DASHBOARD_TAB_NAME', '대시보드 [Dashboard]')
+DASHBOARD_B50_RANGE = f"'{DASHBOARD_TAB_NAME}'!B8:F57"
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
@@ -48,22 +53,33 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
+        await asyncio.to_thread(fetch_song_list)
         await self.tree.sync()
         logger.info(f"Synced slash commands for {self.user}")
 
 bot = MyBot()
 
-# --- 2. B30 IMAGE DESIGN CONSTANTS ---
+# --- 2. B50 IMAGE DESIGN CONSTANTS ---
 JACKET_SIZE = 140
 MARGIN = 20
+SIDE_PADDING = 50
+HORIZONTAL_GAP = 40
+VERTICAL_GAP = 20
 HEADER_SPACE = 160 
 BOTTOM_TEXT_SPACE = 80
-COLUMNS = 6
-ROWS = 5
-PLACEHOLDER_PATH = "placeholder.png"
-JACKET_FOLDER = "jackets" 
+COLUMNS = 5
+ROWS = 10
+BEST_SCORE_COUNT = 50
+TOP_SCORE_COUNT = 10
+DIFFICULTY_BADGE_SIDE = 40
+DIFFICULTY_BADGE_RADIUS = round(DIFFICULTY_BADGE_SIDE / (2 ** 0.5))
+BACKGROUND_TOP = (43, 18, 72)
+BACKGROUND_BOTTOM = (5, 15, 45)
+PLACEHOLDER_PATH = os.path.join(BASE_DIR, "placeholder.png")
+JACKET_FOLDER = os.path.join(BASE_DIR, "jackets")
 
 DIFF_COLORS = {
+    'INS': (65, 75, 200),
     'FTR': (190, 80, 255),
     'BYD': (255, 60, 60),
     'ETR': (220, 150, 255),
@@ -86,12 +102,25 @@ def load_font(size):
             continue
     return ImageFont.load_default()
 
+def create_vertical_gradient(width, height, top_color, bottom_color):
+    image = Image.new('RGB', (width, height), top_color)
+    draw = ImageDraw.Draw(image)
+    denominator = max(height - 1, 1)
+    for y in range(height):
+        ratio = y / denominator
+        color = tuple(
+            round(start + (end - start) * ratio)
+            for start, end in zip(top_color, bottom_color)
+        )
+        draw.line((0, y, width, y), fill=color)
+    return image
+
 # --- 3. SCANNER LOGIC STATE ---
 VALID_MODELS = [
-    'gemini-2.5-flash',
-    'gemini-3.0-flash', 
-    'gemini-1.5-flash',
-    'gemini-1.5-pro'
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
+    'gemini-3.5-flash',
+    'gemini-2.5-flash-lite',
 ]
 processed_messages = deque(maxlen=500)  
 SONG_CACHE = [] 
@@ -101,6 +130,17 @@ SONG_CACHE = []
 FUZZY_MATCH_THRESHOLD = 0.72  
 
 _sheets_service = None
+
+def load_local_song_fallback():
+    try:
+        return sorted({
+            os.path.splitext(filename)[0]
+            for filename in os.listdir(JACKET_FOLDER)
+            if filename.lower().endswith('.jpg')
+        }, key=str.casefold)
+    except OSError:
+        logger.exception("Failed to load local jacket names for autocomplete fallback")
+        return []
 
 def get_sheets_service():
     global _sheets_service
@@ -113,7 +153,7 @@ def fetch_song_list():
     global SONG_CACHE
     try:
         service = get_sheets_service()
-        range_name = f"'{INPUT_TAB_NAME}'!A1:A2500" 
+        range_name = f"'{INPUT_TAB_NAME}'!A5:A2500"
         result = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=range_name).execute()
         rows = result.get('values', [])
         
@@ -121,7 +161,7 @@ def fetch_song_list():
         for row in rows:
             if row:
                 raw_name = str(row[0]).strip()
-                clean_name = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_name).strip()
+                clean_name = re.sub(r'(?i)\s*\[(INS|FTR|ETR|BYD|PRS|PST|INSIGHT|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_name).strip()
                 if clean_name and clean_name not in temp_cache:
                     temp_cache.append(clean_name)
                     
@@ -129,9 +169,13 @@ def fetch_song_list():
         logger.info(f"Loaded {len(SONG_CACHE)} clean songs into autocomplete cache.")
     except Exception as e:
         logger.exception("Failed to fetch songs for cache")
+        if not SONG_CACHE:
+            SONG_CACHE = load_local_song_fallback()
+            logger.info(f"Using {len(SONG_CACHE)} local jacket names for autocomplete.")
 
 def map_difficulty(text):
     t = str(text).upper().strip()
+    if any(x in t for x in ["INS", "INSIGHT", "INDIGO"]): return "INS"
     if any(x in t for x in ["FTR", "FUTURE", "PURPLE", "VIOLET"]): return "FTR"
     if any(x in t for x in ["ETR", "ETERNAL", "LIGHT PURPLE", "LAVENDER", "WHITE"]): return "ETR"
     if any(x in t for x in ["BYD", "BEYOND", "RED", "ORANGE", "CRIMSON"]): return "BYD"
@@ -161,12 +205,12 @@ def update_score_in_sheet(song_target, diff_target, score_value):
         for i, row in enumerate(rows):
             for cell in row[:3]:
                 raw_sheet_song = str(cell).strip()
-                sheet_song = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip().lower()
+                sheet_song = re.sub(r'(?i)\s*\[(INS|FTR|ETR|BYD|PRS|PST|INSIGHT|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip().lower()
                 
                 if sheet_song == ai_song: 
                     if len(row) > 3 and map_difficulty(row[3]) == final_diff:
                         row_index = i + 1
-                        matched_song_name = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip()
+                        matched_song_name = re.sub(r'(?i)\s*\[(INS|FTR|ETR|BYD|PRS|PST|INSIGHT|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip()
                         break
             if row_index != -1: break
 
@@ -175,13 +219,13 @@ def update_score_in_sheet(song_target, diff_target, score_value):
             for i, row in enumerate(rows):
                 for cell in row[:3]:
                     raw_sheet_song = str(cell).strip()
-                    sheet_song = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip().lower()
+                    sheet_song = re.sub(r'(?i)\s*\[(INS|FTR|ETR|BYD|PRS|PST|INSIGHT|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip().lower()
                     
                     if not sheet_song: continue
                     if sheet_song in ai_song or ai_song in sheet_song:
                         if len(row) > 3 and map_difficulty(row[3]) == final_diff:
                             row_index = i + 1
-                            matched_song_name = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip()
+                            matched_song_name = re.sub(r'(?i)\s*\[(INS|FTR|ETR|BYD|PRS|PST|INSIGHT|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip()
                             break
                 if row_index != -1: break
 
@@ -199,7 +243,7 @@ def update_score_in_sheet(song_target, diff_target, score_value):
             for i, row in enumerate(rows):
                 for cell in row[:3]:
                     raw_sheet_song = str(cell).strip()
-                    sheet_song_clean = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip()
+                    sheet_song_clean = re.sub(r'(?i)\s*\[(INS|FTR|ETR|BYD|PRS|PST|INSIGHT|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', raw_sheet_song).strip()
                     sheet_song = sheet_song_clean.lower()
                     
                     if not sheet_song: continue
@@ -243,16 +287,16 @@ def update_score_in_sheet(song_target, diff_target, score_value):
 
         ptt_display = ""
         try:
-            b30_result = service.spreadsheets().values().get(
-                spreadsheetId=SPREADSHEET_ID, range=f"'{B30_TAB_NAME}'!B8:F37"
+            b50_result = service.spreadsheets().values().get(
+                spreadsheetId=SPREADSHEET_ID, range=DASHBOARD_B50_RANGE
             ).execute()
-            b30_rows = b30_result.get('values', [])
-            for b30_row in b30_rows:
-                if len(b30_row) >= 5:
-                    b30_title = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', str(b30_row[2])).strip().lower()
-                    if b30_title == matched_song_name.lower() or b30_title in matched_song_name.lower() or matched_song_name.lower() in b30_title:
+            b50_rows = b50_result.get('values', [])
+            for b50_row in b50_rows:
+                if len(b50_row) >= 5:
+                    b50_title = re.sub(r'(?i)\s*\[(INS|FTR|ETR|BYD|PRS|PST|INSIGHT|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', str(b50_row[2])).strip().lower()
+                    if b50_title == matched_song_name.lower() or b50_title in matched_song_name.lower() or matched_song_name.lower() in b50_title:
                         try:
-                            ptt_val = float(b30_row[4])
+                            ptt_val = float(b50_row[4])
                             ptt_display = f" | PTT: **{ptt_val:.4f}**"
                         except (ValueError, TypeError):
                             pass
@@ -270,7 +314,10 @@ def update_score_in_sheet(song_target, diff_target, score_value):
 # --- 5. SLASH COMMANDS ---
 
 async def song_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-    matches = [song for song in SONG_CACHE if current.lower() in song.lower()]
+    matches = [
+        song for song in SONG_CACHE
+        if current.casefold() in song.casefold() and len(song) <= 100
+    ]
     return [app_commands.Choice(name=match, value=match) for match in matches[:25]]
 
 @bot.tree.command(name="submit", description="Manually upload an Arcaea score to the spreadsheet")
@@ -280,6 +327,7 @@ async def song_autocomplete(interaction: discord.Interaction, current: str) -> l
     score="Type your score (e.g. 9982341)"
 )
 @app_commands.choices(difficulty=[
+    app_commands.Choice(name="Insight (INS)", value="INS"),
     app_commands.Choice(name="Future (FTR)", value="FTR"),
     app_commands.Choice(name="Eternal (ETR)", value="ETR"),
     app_commands.Choice(name="Beyond (BYD)", value="BYD"),
@@ -302,50 +350,60 @@ async def manual_submit(interaction: discord.Interaction, song: str, difficulty:
         await interaction.followup.send(res)
 
 
-@bot.tree.command(name="b30", description="Generate your Arcaea B30 and Potential Stats")
+@bot.tree.command(name="b50", description="Generate your Arcaea B50 and Potential Stats")
 @app_commands.describe(
     username="The name you want displayed on the image",
     current_ptt="Your current in-game Potential (e.g. 12.50)"
 )
-async def b30_slash(interaction: discord.Interaction, current_ptt: float = None, username: str = None):
+async def b50_slash(interaction: discord.Interaction, current_ptt: float = None, username: str = None):
     display_name = username if username else interaction.user.display_name
     await interaction.response.defer() 
     
     try:
         service = get_sheets_service()
-        result = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{B30_TAB_NAME}'!B8:F37").execute()
+        result = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=DASHBOARD_B50_RANGE
+        ).execute()
         rows = result.get('values', [])
 
         if not rows:
-            return await interaction.followup.send(f"No data found in the spreadsheet ({B30_TAB_NAME}!B8:F37).")
+            return await interaction.followup.send(f"No data found in the spreadsheet ({DASHBOARD_B50_RANGE}).")
 
-        df = pd.DataFrame(rows, columns=['Rank', 'Level', 'Title', 'Score', 'PTT'])
+        normalized_rows = [(row + [''] * 5)[:5] for row in rows[:BEST_SCORE_COUNT]]
+        df = pd.DataFrame(normalized_rows, columns=['Rank', 'Level', 'Title', 'Score', 'PTT'])
         df['PTT'] = pd.to_numeric(df['PTT'], errors='coerce').fillna(0)
         
-        b30_sum = df['PTT'].head(30).sum()
-        b30_avg = b30_sum / 30
-        top_10_sum = df['PTT'].head(10).sum()
-        hypo_max = (b30_sum + top_10_sum) / 40
+        b50_sum = df['PTT'].head(BEST_SCORE_COUNT).sum()
+        top_10_sum = df['PTT'].head(TOP_SCORE_COUNT).sum()
+        calculated_ptt = (b50_sum + top_10_sum) / (BEST_SCORE_COUNT + TOP_SCORE_COUNT)
         gen_date = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         font_title = load_font(16)
         font_score = load_font(18)
         font_ptt = load_font(20)
+        font_difficulty = load_font(20)
         font_header = load_font(42)
         font_stats = load_font(22)
         font_date = load_font(16)
 
-        canvas_w = (JACKET_SIZE + MARGIN) * COLUMNS + MARGIN
-        canvas_h = HEADER_SPACE + (JACKET_SIZE + BOTTOM_TEXT_SPACE + MARGIN) * ROWS + MARGIN
-        canvas = Image.new('RGB', (canvas_w, canvas_h), color=(10, 10, 15))
+        canvas_w = (
+            (SIDE_PADDING * 2)
+            + (JACKET_SIZE * COLUMNS)
+            + (HORIZONTAL_GAP * (COLUMNS - 1))
+            + DIFFICULTY_BADGE_RADIUS
+        )
+        canvas_h = HEADER_SPACE + MARGIN + ((JACKET_SIZE + BOTTOM_TEXT_SPACE) * ROWS) + (VERTICAL_GAP * ROWS)
+        canvas = create_vertical_gradient(canvas_w, canvas_h, BACKGROUND_TOP, BACKGROUND_BOTTOM)
         draw = ImageDraw.Draw(canvas)
 
-        draw.text((MARGIN, 20), f"{display_name}'s Best 30", fill=(255, 255, 255), font=font_header)
-        ptt_display = f"PTT: {current_ptt:.2f}" if current_ptt is not None else "PTT: --.--"
-        stats_text = f"{ptt_display}  |  B30 Avg: {b30_avg:.4f}  |  Max: {hypo_max:.4f}"
+        draw.text((SIDE_PADDING, 20), f"{display_name}'s Best 50", fill=(255, 255, 255), font=font_header)
+        displayed_ptt = current_ptt if current_ptt is not None else calculated_ptt
+        displayed_ptt = math.floor(displayed_ptt * 1000) / 1000
+        stats_text = f"PTT: {displayed_ptt:.3f}"
         
-        draw.text((MARGIN, 75), stats_text, fill=(255, 215, 0), font=font_stats)
-        draw.text((MARGIN, 115), f"Generated on: {gen_date}", fill=(150, 150, 150), font=font_date)
+        draw.text((SIDE_PADDING, 75), stats_text, fill=(255, 215, 0), font=font_stats)
+        draw.text((SIDE_PADDING, 115), f"Generated on: {gen_date}", fill=(150, 150, 150), font=font_date)
 
         if os.path.exists(PLACEHOLDER_PATH):
             placeholder_img = Image.open(PLACEHOLDER_PATH).convert("RGB").resize((JACKET_SIZE, JACKET_SIZE))
@@ -353,15 +411,15 @@ async def b30_slash(interaction: discord.Interaction, current_ptt: float = None,
             placeholder_img = Image.new('RGB', (JACKET_SIZE, JACKET_SIZE), (40, 40, 50))
 
         for index, row in df.iterrows():
-            if index >= 30: break
+            if index >= BEST_SCORE_COUNT: break
             col, row_idx = index % COLUMNS, index // COLUMNS
-            x = MARGIN + col * (JACKET_SIZE + MARGIN)
-            y = HEADER_SPACE + MARGIN + row_idx * (JACKET_SIZE + BOTTOM_TEXT_SPACE + MARGIN)
+            x = SIDE_PADDING + col * (JACKET_SIZE + HORIZONTAL_GAP)
+            y = HEADER_SPACE + MARGIN + row_idx * (JACKET_SIZE + BOTTOM_TEXT_SPACE + VERTICAL_GAP)
 
             raw_title = str(row['Title'])
-            diff_match = re.search(r'\[(FTR|BYD|ETR|PRS|PST)\]', raw_title, re.IGNORECASE)
+            diff_match = re.search(r'\[(INS|FTR|BYD|ETR|PRS|PST)\]', raw_title, re.IGNORECASE)
             difficulty = diff_match.group(1).upper() if diff_match else 'FTR'
-            clean_title = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST)\]\s*$', '', raw_title).strip()
+            clean_title = re.sub(r'(?i)\s*\[(INS|FTR|ETR|BYD|PRS|PST)\]\s*$', '', raw_title).strip()
 
             # Jacket assets use song titles with characters Windows cannot store
             # removed. Keep this in sync with the names in jackets/.
@@ -374,6 +432,24 @@ async def b30_slash(interaction: discord.Interaction, current_ptt: float = None,
             else:
                 canvas.paste(placeholder_img, (x, y))
 
+            badge_color = DIFF_COLORS.get(difficulty, (255, 255, 255))
+            badge_center_x = x + JACKET_SIZE
+            badge_center_y = y
+            badge_points = [
+                (badge_center_x, badge_center_y - DIFFICULTY_BADGE_RADIUS),
+                (badge_center_x + DIFFICULTY_BADGE_RADIUS, badge_center_y),
+                (badge_center_x, badge_center_y + DIFFICULTY_BADGE_RADIUS),
+                (badge_center_x - DIFFICULTY_BADGE_RADIUS, badge_center_y),
+            ]
+            draw.polygon(badge_points, fill=badge_color, outline=(255, 255, 255), width=2)
+            level_text = str(row['Level']).strip()
+            level_box = draw.textbbox((0, 0), level_text, font=font_difficulty)
+            level_w = level_box[2] - level_box[0]
+            level_h = level_box[3] - level_box[1]
+            level_x = badge_center_x - level_w / 2
+            level_y = badge_center_y - level_h / 2 - level_box[1]
+            draw.text((level_x, level_y), level_text, fill=(255, 255, 255), font=font_difficulty)
+
             title_text = clean_title
             max_w = JACKET_SIZE - 5 
             
@@ -385,20 +461,25 @@ async def b30_slash(interaction: discord.Interaction, current_ptt: float = None,
             draw.text((x, y + JACKET_SIZE + 5), title_text, fill=(200, 200, 200), font=font_title)
 
             draw.text((x, y + JACKET_SIZE + 25), f"{row['Score']}", fill="white", font=font_score)
-            ptt_color = DIFF_COLORS.get(difficulty, (255, 255, 255))
-            draw.text((x, y + JACKET_SIZE + 48), f"PTT: {row['PTT']:.4f}", fill=ptt_color, font=font_ptt)
+            ptt_color = (255, 215, 0) if index < TOP_SCORE_COUNT else (255, 255, 255)
+            draw.text((x, y + JACKET_SIZE + 48), f"PTT: {row['PTT']:.3f}", fill=ptt_color, font=font_ptt)
 
         with io.BytesIO() as binary:
             canvas.save(binary, 'PNG')
             binary.seek(0)
-            await interaction.followup.send(file=discord.File(fp=binary, filename=f'{display_name}_b30.png'))
+            await interaction.followup.send(file=discord.File(fp=binary, filename=f'{display_name}_b50.png'))
 
     except Exception as e:
-        logger.exception("Error generating B30 image")
-        await interaction.followup.send(f"Error generating B30: {e}")
+        logger.exception("Error generating B50 image")
+        await interaction.followup.send(f"Error generating B50: {e}")
 
 
 # --- 6. BOT EVENTS ---
+
+@bot.event
+async def on_ready():
+    await asyncio.to_thread(fetch_song_list)
+    logger.info(f"Logged in as {bot.user}; autocomplete has {len(SONG_CACHE)} songs.")
 
 @bot.event
 async def on_message(message):
@@ -415,16 +496,21 @@ async def on_message(message):
 
         for attachment in images:
             img_bytes = await attachment.read()
-            extracted_data = None 
+            extracted_data = None
+            attempted_models = []
+            mime_type = attachment.content_type or mimetypes.guess_type(attachment.filename)[0]
+            if mime_type not in {'image/jpeg', 'image/png', 'image/webp'}:
+                mime_type = 'image/jpeg'
             
             for model_name in VALID_MODELS:
-                if extracted_data: break 
+                attempted_models.append(model_name)
                 
                 try:
                     prompt = """
                     Extract Arcaea result: Song Title | Difficulty | Score.
                     
                     DIFFICULTY RULES:
+                    - DARK BLUE/INDIGO badge = INSIGHT (INS).
                     - PURPLE badge = FUTURE (FTR).
                     - LIGHT PURPLE/WHITE badge = ETERNAL (ETR).
                     - RED/ORANGE badge = BEYOND (BYD).
@@ -443,21 +529,32 @@ async def on_message(message):
                         model=model_name,
                         contents=[
                             prompt, 
-                            types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
+                            types.Part.from_bytes(data=img_bytes, mime_type=mime_type)
                         ]
                     )
                     
-                    ai_text = response.text.replace("**", "").strip()
-                    
-                    if "|" in ai_text:
-                        parts = [p.strip() for p in ai_text.split("|")]
+                    ai_text = (response.text or "").replace("**", "").strip()
+
+                    for candidate_line in ai_text.splitlines():
+                        if candidate_line.count("|") < 2:
+                            continue
+                        parts = [p.strip() for p in candidate_line.split("|")]
                         if len(parts) >= 3:
                             raw_title = parts[0]
                             raw_diff = parts[1]
-                            clean_score_only = parts[2].replace(",", "").replace("'", "").strip()
-                            
-                            extracted_data = [raw_title, raw_diff, clean_score_only]
-                            break 
+                            clean_score_only = re.sub(r'\D', '', parts[2])
+
+                            if clean_score_only.isdigit() and 9000000 <= int(clean_score_only) <= 11000000:
+                                extracted_data = [raw_title, raw_diff, clean_score_only]
+                                break
+
+                    if extracted_data:
+                        logger.info(f"Model '{model_name}' successfully read '{attachment.filename}'.")
+                        break
+
+                    logger.warning(
+                        f"Model '{model_name}' returned no valid Arcaea result for '{attachment.filename}'; trying fallback."
+                    )
                 except Exception as e:
                     logger.warning(f"Model '{model_name}' failed to read image: {e}")
                     continue
@@ -465,7 +562,7 @@ async def on_message(message):
             if extracted_data:
                 title, diff, ai_score = extracted_data[0], extracted_data[1], extracted_data[2]
                 
-                title = re.sub(r'(?i)\s*\[(FTR|ETR|BYD|PRS|PST|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', title).strip()
+                title = re.sub(r'(?i)\s*\[(INS|FTR|ETR|BYD|PRS|PST|INSIGHT|FUTURE|ETERNAL|BEYOND|PRESENT|PAST)\]\s*$', '', title).strip()
                 
                 await status_msg.edit(content=f"Uploading **{title}** to spreadsheet...")
                 res = update_score_in_sheet(title, diff, ai_score)
@@ -473,7 +570,10 @@ async def on_message(message):
                     report.append(res)
                     
             else:
-                report.append("Image could not be read. (Models may be exhausted or rate-limited)")
+                report.append(
+                    "Image could not be read after trying all fallback models: "
+                    + ", ".join(attempted_models)
+                )
 
         if report:
             await status_msg.edit(content="**Update Summary:**\n" + "\n".join(report))
@@ -481,4 +581,5 @@ async def on_message(message):
             await status_msg.delete()
 
 # --- RUN BOT ---
-bot.run(DISCORD_TOKEN)
+if __name__ == "__main__":
+    bot.run(DISCORD_TOKEN)
