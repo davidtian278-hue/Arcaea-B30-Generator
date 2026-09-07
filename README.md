@@ -5,12 +5,12 @@ A Discord bot for tracking Arcaea scores with the version 7.0 B50 system. It use
 <img width="480" height="440" alt="Bot-ezgif com-crop" src="https://github.com/user-attachments/assets/7b1cdc5f-f114-4f92-935a-813229d9d201" />
 
 # Example B50
-<img width="323" height="460" alt="image" src="https://github.com/user-attachments/assets/a73b1b76-aeee-4a06-86c2-eb10a4b9df9e" />
+<img width="294" height="768" alt="tainnation_b50" src="https://github.com/user-attachments/assets/e86f23bf-5950-4ca7-a12f-6d5382cca8cb" />
 
 Note: This bot is currently intended only for personal server use. It can scan result images posted directly by users or via automated Discord webhooks.
 
 ## Spreadsheet Template
-This project relies on a fan made Google Sheets layout, specifically, the Lite version of the KR Consultant Sheet:
+This project relies on a fan made Google Sheets layout, specifically, the KR Consultant Sheet, for Version 7.0 and beyond:
 * KR Consultant Sheet: https://docs.google.com/spreadsheets/d/1hDDM3RFr5YLY9TyUYS85tgGAs_Q3f_ftFUJGwg1q1Vc/copy?usp=sharing
 * Arcaea 컨설턴트 시트 Discord: https://discord.gg/GZw4zJgnus
 
